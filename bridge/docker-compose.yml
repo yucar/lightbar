@@ -1,0 +1,41 @@
+# ══════════════════════════════════════════════════════════════════
+# Lightbar — Matterbridge Docker Compose (Raspberry Pi)
+# Version: 1.2.0
+# ══════════════════════════════════════════════════════════════════
+#
+# Uses the official luligu/matterbridge:latest image, which already
+# includes matterbridge-webhooks — no build step, no custom plugin.
+#
+# HOW IT WORKS
+# ────────────
+# We pre-seed two config files into the Matterbridge data volume:
+#   ~/.matterbridge/matterbridge.config.json   ← registers the plugin
+#   ~/.matterbridge/matterbridge-webhooks.config.json  ← webhook URLs
+#
+# These are written by the one-time setup script (see README).
+# After that, docker compose up -d is all you ever need.
+#
+# USAGE (first time)
+# ──────────────────
+#   1. Edit .env — set LIGHTBAR_HOST to your Plasma 2350 W's IP
+#   2. Run:  ./setup.sh          ← writes config files to ~/
+#   3. Run:  docker compose up -d
+#   4. Open  http://<pi-ip>:8283 → scan QR code with Apple Home
+#
+# USAGE (subsequent starts)
+# ─────────────────────────
+#   docker compose up -d
+#
+# ══════════════════════════════════════════════════════════════════
+
+services:
+  matterbridge:
+    container_name: matterbridge
+    image: luligu/matterbridge:latest
+    network_mode: host        # Required for Matter (mDNS / IPv6 multicast)
+    restart: always
+    volumes:
+      - "${HOME}/Matterbridge:/root/Matterbridge"
+      - "${HOME}/.matterbridge:/root/.matterbridge"
+      - "${HOME}/.mattercert:/root/.mattercert"
+    # No custom entrypoint — use the image default (matterbridge --docker)

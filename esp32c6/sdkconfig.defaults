@@ -1,0 +1,33 @@
+# Lightbar — ESP32-C6 sdkconfig defaults
+
+# ── Chip target ──
+CONFIG_IDF_TARGET="esp32c6"
+
+# ── Matter / Thread ──
+CONFIG_ENABLE_ESP_MATTER=y
+
+# Thread networking (for Apple Home Thread border router)
+CONFIG_OPENTHREAD_ENABLED=y
+CONFIG_OPENTHREAD_BORDER_ROUTER=n
+CONFIG_OPENTHREAD_FTD=y
+
+# BLE for Matter commissioning
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+
+# WiFi (fallback / alternative to Thread)
+CONFIG_ESP_WIFI_ENABLED=y
+
+# ── UART for Plasma communication ──
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# ── Matter Device Info ──
+CONFIG_DEVICE_VENDOR_ID=0xFFF1
+CONFIG_DEVICE_PRODUCT_ID=0x8001
+
+# ── Memory optimization ──
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_FREERTOS_HZ=1000
+
+# ── Logging ──
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y

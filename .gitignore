@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+
+# MicroPython secrets — never commit WiFi credentials
+plasma2350w/secrets.py
+
+# Generated docs
+docs/*.pdf
+docs/*.png
+
+# OS
+.DS_Store
+Thumbs.db
+matterbridge-plugin/

@@ -1,189 +1,174 @@
 # Lightbar
-<!-- Version: 2.0.0 -->
+<!-- Version: 3.0.0 -->
 
-**Smart LED gradient light — single board, WiFi, Apple Home / Google / Alexa via Matter**
+**Smart LED gradient light — single board, WiFi, Home Assistant + Apple Home**
 
 ---
 
 ## What It Is
 
 A single-board smart light that displays a smooth polychromatic HSV gradient
-across two 1-metre WS2812 LED strips (192 LEDs total). Controlled via
-Apple Home, Google Home, or Amazon Alexa through **Matter** using
-[Matterbridge](https://github.com/Luligu/matterbridge) with the
-[matterbridge-webhooks](https://github.com/Luligu/matterbridge-webhooks) plugin.
+across two 1-metre WS2812 LED strips (192 LEDs total). The gradient runs
+between **virtual lights** ("Start" and "End" by default). Each one has its own
+on/off, **brightness** and colour, and the strip blends smoothly from one to the
+next in both colour and brightness.
+
+It connects to **Home Assistant** over MQTT and is created there automatically
+(MQTT discovery). HA's **built-in HomeKit Bridge** then puts it in
+**Apple Home / Siri**. No add-ons, custom components or patched plugins are
+needed.
 
 ## Hardware
 
 | Component | Role |
 |---|---|
-| **Pimoroni Plasma 2350 W** | LED driver + WiFi REST server (RP2350 + CYW43439) |
+| **Pimoroni Plasma 2350 W** | LED driver + WiFi + MQTT client (RP2350 + CYW43439) |
 | **2× WS2812 LED strips** | 1 m / 96 RGB LEDs each, in series (192 total) |
-| **Raspberry Pi** | Runs Matterbridge Docker container |
-
-One USB-C cable powers everything on the Plasma side.
+| **Raspberry Pi** (or any Linux box with Docker) | Runs Home Assistant + Mosquitto via Docker Compose |
 
 ## Architecture
 
 ```
-                    USB-C (power + programming)
-                         │
-              ┌──────────┴──────────┐
-              │  Pimoroni Plasma    │
-              │     2350 W          │
-              │  RP2350 + CYW43439  │
- LED strips ◄─┤  Screw terminals    │
-              │  REST API over WiFi │
-              └──────────┬──────────┘
-                         │ HTTP
-                    Home WiFi
-                         │
-              ┌──────────┴──────────┐
-              │    Raspberry Pi     │
-              │  Docker container   │
-              │  Matterbridge +     │
-              │  webhooks plugin    │
-              │                     │
-              │  → Apple Home       │
-              │  → Google Home      │
-              │  → Alexa            │
-              └─────────────────────┘
+ LED strips ◄── Plasma 2350 W ──MQTT──► Mosquitto ◄──► Home Assistant ──HomeKit──► Apple Home
+                (button, REST)   WiFi   └──────── Docker Compose on the Pi ───────┘
 ```
 
-## Features
+- **Two-way state.** Every change is published back to HA, including the
+  physical button and REST calls, so HA and Apple Home always show what the
+  strip is really doing.
+- **Availability.** If the Plasma loses power or WiFi, the broker marks it
+  *offline* in HA (MQTT Last Will).
+- **Restores after a power cut.** State is saved to flash; `POWER_ON` in
+  `config.py` picks what happens at boot.
 
-- **On/Off** via Apple Home, Siri, Google Assistant, Alexa, or physical button
-- **Smooth fade** transitions (easeInOutCirc, 1 s)
-- **Colour crossfade** — smooth 500 ms transition between colour changes
-- **2-colour gradient** — pick a colour for each end of the strip
-- **Polychromatic HSV** — hue travels forward around the colour wheel
-- **Local control** — button A works without network
-- **REST API** — full HTTP control over WiFi
-- **Matter via Matterbridge** — works with Apple Home, Google Home, Alexa
+### Why not Matter?
 
-## REST API
+Home Assistant's Matter support is a **controller** only. From the official
+docs: *"Home Assistant is not a bridge itself and it cannot turn existing
+devices within Home Assistant into Matter compatible devices."* Publishing HA
+entities over Matter needs an extra bridge (Matterbridge, Home Assistant Matter
+Hub). For Apple Home, HA's built-in HomeKit Bridge does the same job with no
+extras, so this project uses it. See [docs/setup.md](docs/setup.md#google-home--alexa)
+for Google Home / Alexa.
 
-| Method | Path | Body / Params | Description |
-|---|---|---|---|
-| `GET` | `/status` | — | Current state |
-| `GET` | `/info` | — | Device info + endpoints |
-| `POST` | `/on` | — | Turn on with fade |
-| `POST` | `/off` | — | Turn off with fade |
-| `POST` | `/toggle` | — | Toggle on/off |
-| `POST` | `/brightness` | `?value=0-100` or `{"value":0-1}` | Set brightness |
-| `POST` | `/color` | `?idx=N&h=0-360&s=0-100` | Set gradient endpoint colour (hue/sat) |
-| `POST` | `/color` | `?idx=N&r=0-255&g=0-255&b=0-255` | Set gradient endpoint colour (RGB) |
-| `POST` | `/color` | `{"colors":[{"h":H,"s":S,"v":V},...]}` | Set full gradient (JSON body) |
-| `POST` | `/randomize` | — | Randomize gradient colours |
+## Entities in Home Assistant
 
-### Examples
+| Entity | Controls |
+|---|---|
+| `light.lightbar` | All lights: on/off, and brightness scaled proportionally (ratios kept) |
+| `light.lightbar_start` | Start of the strip: on/off, brightness, colour |
+| `light.lightbar_end` | End of the strip: on/off, brightness, colour |
+| `button.lightbar_randomize` | New random gradient |
 
-```bash
-# Turn on
-curl -X POST http://lightbar.local/on
+Turning one light off (or dimming it) fades that end of the strip smoothly
+while the other end stays lit.
 
-# Set blue-to-purple gradient
-curl -X POST 'http://lightbar.local/color?idx=0&h=240&s=100'
-curl -X POST 'http://lightbar.local/color?idx=1&h=300&s=100'
+## Button A
 
-# Brightness to 60%
-curl -X POST 'http://lightbar.local/brightness?value=60'
-
-# Check status
-curl http://lightbar.local/status
-```
-
-## Button Controls
-
-| Button | Action | Effect |
-|---|---|---|
-| **A** click (off) | Turn on | Fades to current gradient |
-| **A** click (on, within 2s of turning on) | Randomize | New random gradient colours |
-| **A** click (on, after 2s) | Turn off | Fades to black |
-| **A** hold | Brightness up | Increases while held |
+| Action | Effect |
+|---|---|
+| Click (off) | All lights on (1 s fade) |
+| Click (on, within 2 s of turning on) | Randomize gradient colours |
+| Click (on, after 2 s) | All lights off |
+| Hold | Dim. The direction alternates with each hold; from off it starts at minimum and brightens |
 
 ## Status LED
 
 | Colour | Meaning |
 |---|---|
 | Blue pulse | Connecting to WiFi |
-| Green | Connected, all OK |
 | Orange | WiFi disconnected (retrying) |
+| Magenta | WiFi OK, MQTT broker unreachable |
+| Green | All OK |
+
+## REST API (optional, local)
+
+For scripts and debugging. When `API_TOKEN` is set in `secrets.py`, every
+request needs `Authorization: Bearer <token>`. Changes are **POST only**.
+
+| Method | Path | Params (query or JSON body) | Description |
+|---|---|---|---|
+| `GET` | `/status` | — | Full state |
+| `GET` | `/info` | — | Device info |
+| `POST` | `/on` · `/off` · `/toggle` | `light=N` (optional) | All lights, or light N |
+| `POST` | `/brightness` | `value=0-100`, `light=N` (optional) | Without `light`: scales all |
+| `POST` | `/color` | `light=N` + `h=0-360&s=0-100` **or** `r,g,b=0-255` | Set a light's colour |
+| `POST` | `/randomize` | — | Random gradient |
+
+```bash
+T="Authorization: Bearer <API_TOKEN>"
+curl -X POST -H "$T" 'http://lightbar.local/on'
+curl -X POST -H "$T" 'http://lightbar.local/brightness?light=1&value=30'   # End at 30 %
+curl -X POST -H "$T" 'http://lightbar.local/color?light=0&h=240&s=100'     # Start blue
+curl -H "$T" http://lightbar.local/status
+```
 
 ## File Structure
 
 ```
 lightbar/
-├── README.md                          ← this file (v2.0.0)
-├── RESEARCH-Plasma2350W.md            ← hardware research & options analysis
-├── plasma2350w/                       ← Plasma 2350 W firmware (MicroPython)
-│   ├── main.py                        ← v1.5.0 — LED driver + WiFi + REST API
-│   ├── gradient.py                    ← v1.1.0 — HSV gradient math
-│   └── secrets.py                     ← v1.0.0 — WiFi credentials (edit before flashing)
-├── bridge/                            ← Matterbridge bridge for Raspberry Pi
-│   ├── docker-compose.yml             ← v1.2.0 — Docker deployment
-│   ├── .env                           ← v1.1.0 — Plasma IP + display name
-│   └── setup.sh                       ← v1.1.0 — One-time config setup script
-├── plasma/                            ← (legacy) Plasma 2040 firmware
-├── esp32c6/                           ← (legacy) ESP32-C6 Matter firmware
-├── wiring/
-│   └── wiring.md                      ← v2.0.0 — wiring diagram
-└── docs/
-    └── setup.md                       ← v2.0.0 — full setup guide
+├── README.md                    ← this file
+├── plasma2350w/                 ← firmware (Pimoroni MicroPython)
+│   ├── main.py                  ← boot entry point
+│   ├── app.py                   ← wiring: WiFi, button, status LED, tasks
+│   ├── config.py                ← settings: LEDs, light names, timings, MQTT host
+│   ├── secrets.example.py       ← copy to secrets.py: WiFi / MQTT / API token
+│   ├── lightbar.py              ← light state, crossfade renderer, save/restore
+│   ├── gradient.py              ← gradient + blend maths (flat float buffers)
+│   ├── ha.py                    ← Home Assistant MQTT discovery + commands
+│   ├── mqtt.py                  ← tiny non-blocking MQTT 3.1.1 client
+│   └── http_api.py              ← local REST API
+├── hub/                         ← Docker Compose: Home Assistant + Mosquitto
+│   ├── docker-compose.yml
+│   ├── .env.example             ← copy to .env: every setting lives here
+│   ├── mosquitto/               ← broker config + entrypoint (users/ACL from .env)
+│   └── homeassistant/configuration.yaml
+├── tests/                       ← host tests (python3 -m unittest discover -s tests)
+├── wiring/wiring.md
+├── docs/setup.md                ← full setup guide
+├── plasma/                      ← (legacy) Plasma 2040 firmware
+└── esp32c6/                     ← (legacy) ESP32-C6 Matter firmware
 ```
 
 ## Quick Start
 
-### 1. Flash the Plasma 2350 W
-
-1. Download Pimoroni MicroPython for **Plasma 2350 W**:
-   https://github.com/pimoroni/plasma/releases/latest
-2. Hold BOOT, tap RESET → drag `.uf2` onto the `RP2350` drive
-3. Edit `secrets.py` with your WiFi credentials (static IP recommended)
-4. Copy `main.py`, `gradient.py`, `secrets.py` to the Plasma via Thonny
-
-### 2. Set Up Matterbridge on Raspberry Pi
-
-See **[docs/setup.md](docs/setup.md)** for the full step-by-step guide.
-
-Short version:
+Full guide: **[docs/setup.md](docs/setup.md)**
 
 ```bash
-# Create data dirs
-mkdir -p ~/Matterbridge ~/.matterbridge ~/.mattercert
+# 1. Hub (on the Pi)
+cd hub
+cp .env.example .env && nano .env        # set the two MQTT passwords
+docker compose up -d                     # → http://<pi-ip>:8123
 
-# Write config files (see docs/setup.md for full content)
-# Then start:
-cd ~/lightbar-bridge
-sudo docker compose up -d
+# 2. Firmware
+cp plasma2350w/secrets.example.py plasma2350w/secrets.py   # WiFi + MQTT_PASSWORD
+# edit plasma2350w/config.py → MQTT_HOST = "<pi-ip>"
+mpremote cp plasma2350w/*.py : + reset    # copies secrets.py too
 
-# Add the plugin, apply patches, restart
-sudo docker exec -it matterbridge matterbridge --docker --add matterbridge-webhooks
-# (apply bug patches — see docs/setup.md Step 3.5)
-sudo docker compose restart
+# 3. In HA: add the MQTT integration (127.0.0.1, MQTT_HA_USER / MQTT_HA_PASSWORD),
+#    restart HA once, then scan the HomeKit QR code from HA's notifications.
 ```
 
-### 3. Pair with Apple Home
+## Development
 
-1. Open Matterbridge web UI → **http://\<pi-ip\>:8283**
-2. Scan the QR code with the Apple Home app
-3. **"Lightbar Start"** and **"Lightbar End"** appear as lights
-4. Group them in Apple Home for unified control (optional)
+```bash
+sudo apt install mosquitto mosquitto-clients   # optional: enables the MQTT tests
+python3 -m unittest discover -s tests -v
+```
+
+The tests run the firmware under CPython with stand-ins for the hardware
+modules. They cover the gradient maths, per-light brightness and fades, the
+button state machine, the REST API (auth, validation) and MQTT discovery and
+commands against a real Mosquitto broker.
 
 ## Status
 
-- [x] Hardware: Plasma 2350 W single-board design
-- [x] Firmware: LED driving + PIO WS2812
-- [x] Firmware: WiFi + REST API
-- [x] Firmware: Button A control (on/off/randomize/brightness)
-- [x] Firmware: Status LED
-- [x] Firmware: Smooth fade (easeInOutCirc, 1 s)
-- [x] Firmware: Colour crossfade (500 ms)
-- [x] Firmware: Polychromatic gradient (2-colour)
-- [x] Bridge: Matterbridge + webhooks plugin (Docker on Pi)
-- [x] Bridge: On/Off working via Apple Home
-- [x] Bridge: Brightness working via Apple Home
-- [x] Bridge: Colour working via Apple Home
-- [x] Apple Home pairing tested ✅
-- [ ] Google Home pairing tested
-- [ ] 3-colour gradient via Apple Home
+- [x] Firmware: per-light on/off, brightness and colour with smooth blending
+- [x] Firmware: non-blocking crossfades (any change, even mid-fade)
+- [x] Firmware: MQTT + Home Assistant discovery, two-way state, availability
+- [x] Firmware: state saved to flash, configurable power-on behaviour
+- [x] Firmware: authenticated, POST-only REST API
+- [x] Hub: Docker Compose (HA + Mosquitto with per-user ACLs), all config in `.env`
+- [x] Apple Home via HA HomeKit Bridge
+- [ ] Google Home / Alexa (possible through HA; not tested)
+- [ ] Tested on real Plasma hardware after the v2 firmware rewrite

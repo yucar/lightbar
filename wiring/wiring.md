@@ -1,5 +1,5 @@
 # Lightbar — Wiring
-<!-- Version: 2.0.0 -->
+<!-- Version: 2.1.0 -->
 
 ## Overview
 
@@ -58,7 +58,8 @@ no overcurrent protection on the 2350 W — keep an eye on power draw if using
 many LEDs at full white.
 
 If you need more headroom, power the strips from an external 5V PSU directly
-(connect GND to the Plasma's GND too).
+(connect GND to the Plasma's GND too), or cap the output with
+`MAX_BRIGHTNESS` in `plasma2350w/config.py`.
 
 ---
 
@@ -67,8 +68,9 @@ If you need more headroom, power the strips from an external 5V PSU directly
 | Colour | Meaning |
 |---|---|
 | Blue pulse | Connecting to WiFi |
-| Green | Connected, all OK |
 | Orange | WiFi disconnected, retrying |
+| Magenta | WiFi OK, MQTT broker unreachable (check `MQTT_HOST` / credentials) |
+| Green | Connected to WiFi and MQTT, all OK |
 
 ---
 

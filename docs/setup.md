@@ -1,7 +1,7 @@
 # Lightbar — Setup Guide
-<!-- Version: 2.0.0 -->
+<!-- Version: 3.0.0 -->
 
-**Single-board WiFi LED gradient light — Matter via Matterbridge on Raspberry Pi**
+**Single-board WiFi LED gradient light: Home Assistant (MQTT) + Apple Home (HomeKit Bridge)**
 
 ---
 
@@ -11,390 +11,249 @@
 
 | Item | Notes |
 |---|---|
-| **Pimoroni Plasma 2350 W** | [shop.pimoroni.com](https://shop.pimoroni.com/products/plasma-2350-w) — get the A4 stepping |
+| **Pimoroni Plasma 2350 W** | [shop.pimoroni.com](https://shop.pimoroni.com/products/plasma-2350-w) |
 | **2× WS2812 LED strips** | 1 m / 96 LEDs each (192 total) |
 | **USB-C cable** | Data + power capable |
-| **Raspberry Pi** | Any model with Docker support (Pi 3B+ or newer recommended) |
+| **Raspberry Pi** | Pi 4 / Pi 5 (64-bit OS) or any Linux machine with Docker |
 
 ### Software
 
 | Item | Notes |
 |---|---|
 | **Pimoroni MicroPython** | `.uf2` for Plasma 2350 W (NOT the generic RP2350) |
-| **Thonny IDE** | For copying files to the Plasma — [thonny.org](https://thonny.org) |
-| **Docker + Docker Compose** | For the Matterbridge bridge on the Pi |
+| **mpremote** or **Thonny** | To copy files to the Plasma (`pip install mpremote`) |
+| **Docker + Docker Compose** | On the Pi |
 
 ---
 
 ## Architecture
 
 ```
-                    USB-C (power)
-                         │
-              ┌──────────┴──────────┐
-              │  Pimoroni Plasma    │
-              │     2350 W          │
-              │  RP2350 + CYW43439  │
- LED strips ◄─┤  Screw terminals    │
-              │  REST API over WiFi │
-              └──────────┬──────────┘
-                         │ HTTP
-                    Home WiFi
-                         │
-              ┌──────────┴──────────┐
-              │    Raspberry Pi     │
-              │  Docker container   │
-              │                     │
-              │  Matterbridge +     │
-              │  webhooks plugin    │
-              │                     │
-              │  → Apple Home       │
-              │  → Google Home      │
-              │  → Alexa            │
-              └─────────────────────┘
+┌──────────────────┐        WiFi / MQTT        ┌─────────────── Raspberry Pi (Docker Compose) ──────────────┐
+│  Plasma 2350 W   │ ────────────────────────► │  Mosquitto  ◄──►  Home Assistant  ── HomeKit Bridge ──►    │──► Apple Home / Siri
+│  LEDs · button   │ ◄──────────────────────── │  (users+ACL)       (MQTT discovery)                        │
+└──────────────────┘   commands / state        └────────────────────────────────────────────────────────────┘
 ```
+
+Nothing is installed into Home Assistant: the Lightbar announces itself through
+MQTT discovery, and HomeKit Bridge is part of HA's core.
 
 ---
 
 ## Step 1: Wire the LED Strips
 
-Connect both LED strips **in series** to the Plasma 2350 W screw terminals:
-
-- **DAT** → data-in of strip 1
-- **5V** → 5V of strip 1
-- **GND** → GND of strip 1
-- Strip 1 data-out → strip 2 data-in (series connection)
-
-Both strips share power from the Plasma's USB-C (up to 3 A). For gradients
-this is plenty — only full-white at maximum brightness approaches the limit.
+Connect both strips **in series** to the Plasma 2350 W screw terminals
+(**DAT** → DIN, **5V** → VCC, **GND** → GND; strip 1 DOUT → strip 2 DIN).
+Details and power notes: [wiring/wiring.md](../wiring/wiring.md).
 
 ---
 
-## Step 2: Flash the Plasma Firmware
+## Step 2: Start the Hub (Raspberry Pi)
 
-### 2.1 — Download Pimoroni MicroPython for Plasma 2350 W
-
-Go to: https://github.com/pimoroni/plasma/releases/latest
-
-Download the `.uf2` file labelled **Plasma 2350 W** (not Plasma 2350).
-
-### 2.2 — Flash
-
-1. Hold **BOOT**, tap **RESET** (or plug in USB-C while holding BOOT)
-2. A drive called `RP2350` appears
-3. Drag the `.uf2` onto it — the Plasma reboots automatically
-
-### 2.3 — Edit WiFi credentials
-
-Open `plasma2350w/secrets.py` and fill in your network details:
-
-```python
-# secrets.py — WiFi credentials
-# Version: 1.0.0
-
-WIFI_SSID = "YourWiFiNetwork"
-WIFI_PASSWORD = "YourWiFiPassword"
-
-# Recommended: set a static IP so Matterbridge always finds the Plasma
-# STATIC_IP = "192.168.1.161"
-# SUBNET    = "255.255.255.0"
-# GATEWAY   = "192.168.1.1"
-# DNS       = "192.168.1.1"
-```
-
-### 2.4 — Copy files to the Plasma
-
-In **Thonny**:
-
-1. Connect the Plasma via USB-C
-2. Set interpreter: **MicroPython (RP2040)** — works for RP2350 too
-3. Upload these three files to the root of the device:
-   - `plasma2350w/main.py` ← v1.5.0
-   - `plasma2350w/gradient.py` ← v1.1.0
-   - `plasma2350w/secrets.py` ← v1.0.0
-
-Or via `mpremote`:
-
-```bash
-mpremote connect /dev/tty.usbmodem* cp plasma2350w/main.py :main.py
-mpremote connect /dev/tty.usbmodem* cp plasma2350w/gradient.py :gradient.py
-mpremote connect /dev/tty.usbmodem* cp plasma2350w/secrets.py :secrets.py
-mpremote connect /dev/tty.usbmodem* reset
-```
-
-### 2.5 — Verify
-
-After reset the serial console should show:
-
-```
-==================================================
-  Lightbar — Plasma 2350 W
-==================================================
-  LEDs: 192
-  Lights: 2 (gradient endpoints)
-  Gradient: polychromatic HSV
-  Fade: easeInOutCirc over 1.0s
-  Color crossfade: 0.5s
-
-[WiFi]
-  Connecting to 'YourWiFiNetwork'...
-  Connected! IP: 192.168.1.161
-
-[Server]
-  HTTP server on http://192.168.1.161:80
-```
-
-Test the REST API:
-
-```bash
-curl http://192.168.1.161/info
-curl -X POST http://192.168.1.161/on
-curl -X POST 'http://192.168.1.161/color?idx=0&h=0&s=100'    # red start
-curl -X POST 'http://192.168.1.161/color?idx=1&h=240&s=100'  # blue end
-curl http://192.168.1.161/status
-```
-
-The status response should reflect the new colours:
-```json
-{"on": true, "brightness": 1.0, "colors": [{"h": 0.0, ...}, {"h": 0.667, ...}]}
-```
-
----
-
-## Step 3: Set Up the Matterbridge Bridge on Raspberry Pi
-
-### 3.1 — Install Docker
+### 2.1 — Install Docker
 
 ```bash
 curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker $USER
-# Log out and back in for group membership to take effect
+sudo usermod -aG docker $USER      # log out and back in afterwards
 ```
 
-### 3.2 — Create Matterbridge data directories
+### 2.2 — Configure
+
+Copy the `hub/` folder to the Pi, then:
 
 ```bash
-mkdir -p ~/Matterbridge ~/.matterbridge ~/.mattercert
+cd hub
+cp .env.example .env
+nano .env
 ```
 
-### 3.3 — Write the Matterbridge config files
+Every setting lives in `.env`:
 
-Replace `192.168.1.161` with your Plasma's actual IP.
+| Variable | Purpose |
+|---|---|
+| `HA_VERSION` | Home Assistant image tag. `stable`, or pin a release such as `2026.9.3` |
+| `MOSQUITTO_VERSION` | Mosquitto image tag (default `2`) |
+| `TZ` | Time zone, e.g. `Europe/Madrid` |
+| `MQTT_PORT` | Broker port on the Pi (default `1883`) |
+| `MQTT_HA_USER` / `MQTT_HA_PASSWORD` | Home Assistant's broker login |
+| `MQTT_DEVICE_USER` / `MQTT_DEVICE_PASSWORD` | The Lightbar's login. It may only use its own topics |
+| `MQTT_TOPIC_PREFIX` | Must match `config.py` (default `lightbar`) |
+| `HOMEKIT_NAME` / `HOMEKIT_PORT` | Name and port of the bridge in Apple Home |
+| `HOMEKIT_ENTITY_GLOB` | Which HA entities go to Apple Home (default `light.lightbar*`) |
+
+The broker **refuses to start** while a password is still `change-me`.
+Use long random passwords, e.g. `openssl rand -base64 18`.
+
+### 2.3 — Start
 
 ```bash
-# Register the matterbridge-webhooks plugin
-cat > ~/.matterbridge/matterbridge.config.json << 'EOF'
-{
-  "plugins": [
-    { "name": "matterbridge-webhooks", "enabled": true }
-  ]
-}
-EOF
-
-# Configure the plugin with Lightbar endpoints
-cat > ~/.matterbridge/matterbridge-webhooks.config.json << 'EOF'
-{
-  "name": "matterbridge-webhooks",
-  "type": "DynamicPlatform",
-  "webhooks": {},
-  "outlets": {},
-  "lights": {
-    "Lightbar Start": {
-      "onUrl":         "POST#http://192.168.1.161/on",
-      "offUrl":        "POST#http://192.168.1.161/off",
-      "brightnessUrl": "POST#http://192.168.1.161/brightness?value=${LEVEL100}",
-      "colorTempUrl":  "",
-      "rgbUrl":        "POST#http://192.168.1.161/color?idx=0&h=${HUE}&s=${SATURATION}"
-    },
-    "Lightbar End": {
-      "onUrl":         "POST#http://192.168.1.161/on",
-      "offUrl":        "POST#http://192.168.1.161/off",
-      "brightnessUrl": "POST#http://192.168.1.161/brightness?value=${LEVEL100}",
-      "colorTempUrl":  "",
-      "rgbUrl":        "POST#http://192.168.1.161/color?idx=1&h=${HUE}&s=${SATURATION}"
-    }
-  }
-}
-EOF
+docker compose up -d
+docker compose ps          # mosquitto should be "healthy"
 ```
 
-> **Important:** Always edit these files with `sudo` if you run
-> `docker compose` with `sudo`, because `${HOME}` resolves to `/root`.
-> In that case replace `~` with `/root` in all paths above.
+To change a setting later, edit `.env` and run `docker compose up -d` again.
+Broker users and ACLs are regenerated on every start.
 
-### 3.4 — Write the docker-compose.yml
+### 2.4 — Home Assistant onboarding
 
-Copy `bridge/docker-compose.yml` (v1.2.0) to the Pi, or create it:
+1. Open **http://\<pi-ip\>:8123** and create your user.
+2. **Settings → Devices & services → Add integration → MQTT**
+   - Broker: `127.0.0.1` · Port: your `MQTT_PORT`
+   - Username / password: `MQTT_HA_USER` / `MQTT_HA_PASSWORD` from `.env`
+
+---
+
+## Step 3: Flash the Plasma Firmware
+
+### 3.1 — MicroPython
+
+1. Download the **Plasma 2350 W** `.uf2` from
+   https://github.com/pimoroni/plasma/releases/latest
+2. Hold **BOOT**, tap **RESET** → drag the `.uf2` onto the `RP2350` drive.
+
+### 3.2 — Configure
 
 ```bash
-mkdir -p ~/lightbar-bridge
-cat > ~/lightbar-bridge/docker-compose.yml << 'EOF'
-services:
-  matterbridge:
-    container_name: matterbridge
-    image: luligu/matterbridge:latest
-    network_mode: host
-    restart: always
-    volumes:
-      - "${HOME}/Matterbridge:/root/Matterbridge"
-      - "${HOME}/.matterbridge:/root/.matterbridge"
-      - "${HOME}/.mattercert:/root/.mattercert"
-EOF
+cp plasma2350w/secrets.example.py plasma2350w/secrets.py
 ```
 
-### 3.5 — Patch the webhooks plugin bug
+`secrets.py` (never committed):
 
-The `luligu/matterbridge:latest` image ships with `matterbridge-webhooks`
-pre-installed but has a bug where `moveToHueAndSaturation` crashes with
-`Behavior colorControl is not supported`. Patch it after first start:
+| Setting | Value |
+|---|---|
+| `WIFI_SSID` / `WIFI_PASSWORD` | 2.4 GHz network |
+| `MQTT_USER` / `MQTT_PASSWORD` | `MQTT_DEVICE_USER` / `MQTT_DEVICE_PASSWORD` from `hub/.env` |
+| `API_TOKEN` | Any long random string; protects the local REST API (`None` = open) |
+| `STATIC_IP` … | Optional static IP |
+
+`config.py`: set **`MQTT_HOST`** to the Pi's IP. Everything else is optional:
+
+| Setting | Default | Notes |
+|---|---|---|
+| `LIGHT_NAMES` | `("Start", "End")` | One virtual light per name, evenly spaced. 3 names = start/middle/end |
+| `DEFAULT_COLORS` | blue → purple | `(hue, sat)` per light, used until changed |
+| `EXPOSE_ALL_LIGHT` | `True` | Extra "Lightbar" light controlling all of them |
+| `FADE_S` / `BRIGHTNESS_FADE_S` / `COLOR_FADE_S` | 1.0 / 0.5 / 0.5 | Transition times (HA can override per command) |
+| `POWER_ON` | `"restore"` | `"off"`, `"on"` or `"restore"` after a power cut |
+| `MAX_BRIGHTNESS` | `1.0` | Global cap for the 3 A USB-C power budget |
+| `HTTP_ENABLED` | `True` | Turn the REST API off completely |
+
+### 3.3 — Copy to the board
 
 ```bash
-# Start once to pull the image
-cd ~/lightbar-bridge
-sudo docker compose up -d
-
-# Apply the fix (removes the broken stateOf() call)
-sudo docker exec -it matterbridge sh -c "
-  sed -i '245s/.*/  \/\/ stateOf() removed: attributes already set by command handler/' \
-    /usr/local/lib/node_modules/matterbridge-webhooks/dist/module.js
-"
-
-# Patch HUE/SATURATION to read from attributes instead of request
-sudo docker exec -it matterbridge sh -c "
-  sed -i '212s/data\.request\.hue/data.attributes.currentHue/g' \
-    /usr/local/lib/node_modules/matterbridge-webhooks/dist/module.js
-  sed -i '213s/data\.request\.hue/data.attributes.currentHue/g' \
-    /usr/local/lib/node_modules/matterbridge-webhooks/dist/module.js
-  sed -i '215s/data\.request\.saturation/data.attributes.currentSaturation/g' \
-    /usr/local/lib/node_modules/matterbridge-webhooks/dist/module.js
-  sed -i '216s/data\.request\.saturation/data.attributes.currentSaturation/g' \
-    /usr/local/lib/node_modules/matterbridge-webhooks/dist/module.js
-"
-
-# Restart to apply
-sudo docker compose restart
+mpremote cp plasma2350w/*.py : + reset
 ```
 
-> **Note:** These patches are lost if the container image is updated
-> (`docker compose pull`). Re-apply after any image update.
+(Or upload every `.py` in `plasma2350w/` with Thonny: `main.py`, `app.py`,
+`config.py`, `secrets.py`, `lightbar.py`, `gradient.py`, `ha.py`, `mqtt.py`,
+`http_api.py`.)
 
-### 3.6 — Add the plugin via CLI
+### 3.4 — Verify
 
-```bash
-sudo docker exec -it matterbridge matterbridge --docker --add matterbridge-webhooks
-sudo docker compose restart
-```
-
-### 3.7 — Verify
-
-```bash
-sudo docker compose logs -f
-```
-
-You should see the plugin load and devices register:
+Serial console (`mpremote repl`):
 
 ```
-[PluginManager] Loading plugin matterbridge-webhooks type AnyPlatform
-[Matterbridge webhooks plugin] Initializing platform: matterbridge-webhooks
-[PluginManager] Started plugin matterbridge-webhooks type DynamicPlatform
-[Matterbridge] Matterbridge bridge started successfully
+==================================================
+  Lightbar 2.0.0 — Plasma 2350 W
+==================================================
+  LEDs: 192   Lights: Start, End
+  Device id: lightbar_a1b2c3
+  MQTT broker: 192.168.1.10:1883
+  REST API on port 80
+[WiFi] Connected, IP 192.168.1.161
+[MQTT] Connected to 192.168.1.10:1883
 ```
 
-Open the Matterbridge web UI: **http://\<pi-ip\>:8283**
+The status LED turns **green**. In HA, **Settings → Devices & services → MQTT**
+now shows a **Lightbar** device with `light.lightbar`, `light.lightbar_start`,
+`light.lightbar_end` and `button.lightbar_randomize`.
 
 ---
 
 ## Step 4: Pair with Apple Home
 
-1. Open the **Home** app
-2. Tap **+** → **Add Accessory**
-3. Scan the **QR code** shown in the Matterbridge web UI
-4. **"Lightbar Start"** and **"Lightbar End"** appear as Extended Color Lights
-5. Assign them to a room
+1. **Restart Home Assistant once** after the Lightbar entities first appear
+   (Settings → ⋮ → Restart). HomeKit Bridge only picks up entities that exist
+   when it starts. Later restarts don't need this.
+2. Open HA's **Notifications** (bell icon) → *HomeKit Pairing* shows a QR code.
+3. iPhone **Home** app → **+** → **Add Accessory** → scan it.
+4. **Lightbar**, **Lightbar Start** and **Lightbar End** appear as lights.
 
-### Grouping (optional)
+The iPhone and the Pi must be on the same network / VLAN (HomeKit uses mDNS).
+For control away from home you need an Apple home hub (HomePod / Apple TV).
 
-Long-press one Lightbar tile → **Settings** → **Group with Other Accessories**
-→ select the other endpoint. They'll appear as one accessory with two colour controls.
+Don't want the "all" light in Apple Home? Set `EXPOSE_ALL_LIGHT = False` in
+`config.py`, or narrow `HOMEKIT_ENTITY_GLOB` in `.env`.
+
+### Google Home / Alexa
+
+HA can serve these without extra software through its built-in
+`google_assistant` / `alexa` integrations. They need HA reachable over HTTPS
+from the internet, or a Home Assistant Cloud (Nabu Casa) subscription, which
+does it in a few clicks. HA cannot expose its entities over **Matter** by
+itself. That needs a separate bridge such as Matterbridge (with its HA plugin)
+or Home Assistant Matter Hub.
 
 ---
 
 ## Step 5: Use It
 
-### Physical Button (A button on the Plasma)
+### Physical button (A)
 
 | Action | Effect |
 |---|---|
-| Click (lights off) | Turn on with fade |
-| Click (lights on, within 2s of turning on) | Randomize gradient colours |
-| Click (lights on, after 2s) | Turn off with fade |
-| Hold | Increase brightness |
+| Click (off) | All lights on |
+| Click (on, within 2 s of turning on) | Randomize colours |
+| Click (on, after 2 s) | All lights off |
+| Hold | Dim. The direction alternates with each hold; from off it brightens from minimum |
+
+Every button action shows up in HA / Apple Home within ~0.2 s.
 
 ### REST API
 
 ```bash
-PLASMA=192.168.1.161
+P=http://192.168.1.161
+T="Authorization: Bearer <API_TOKEN>"
 
-# On/Off
-curl -X POST http://$PLASMA/on
-curl -X POST http://$PLASMA/off
-curl -X POST http://$PLASMA/toggle
-
-# Brightness (0.0–1.0, or 0–100)
-curl -X POST "http://$PLASMA/brightness?value=0.5"
-
-# Colour by hue/sat (hue 0–360°, saturation 0–100%)
-curl -X POST "http://$PLASMA/color?idx=0&h=0&s=100"    # start = red
-curl -X POST "http://$PLASMA/color?idx=1&h=240&s=100"  # end = blue
-
-# Colour by RGB (0–255)
-curl -X POST "http://$PLASMA/color?idx=0&r=255&g=80&b=0"
-
-# Full gradient via JSON body
-curl -X POST http://$PLASMA/color \
-  -H "Content-Type: application/json" \
-  -d '{"colors": [{"h":0.08,"s":1,"v":1}, {"h":0.75,"s":0.8,"v":1}]}'
-
-# Randomize
-curl -X POST http://$PLASMA/randomize
-
-# Status
-curl http://$PLASMA/status
+curl -X POST -H "$T" $P/on                                   # all on
+curl -X POST -H "$T" "$P/off?light=1"                        # End off (Start stays on)
+curl -X POST -H "$T" "$P/brightness?value=40"                # all, ratios kept
+curl -X POST -H "$T" "$P/brightness?light=0&value=100"       # Start 100 %
+curl -X POST -H "$T" "$P/color?light=1&h=0&s=100"            # End red
+curl -X POST -H "$T" "$P/color?light=0&r=255&g=80&b=0"       # Start orange (RGB)
+curl -X POST -H "$T" -d '{"light":1,"h":200,"s":60}' $P/color  # JSON body works too
+curl -X POST -H "$T" $P/randomize
+curl -H "$T" $P/status
 ```
+
+Brightness is always **0-100 %**. v1 treated values ≤ 1 as fractions, so
+1 % used to mean 100 %.
 
 ---
 
 ## Troubleshooting
 
-### Plasma won't connect to WiFi
-- Only 2.4 GHz networks supported (CYW43439 chip)
-- Check `secrets.py` — SSID and password are case-sensitive
-- Status LED is orange while retrying
+### Status LED is orange
+- 2.4 GHz only (CYW43439); SSID and password are case-sensitive.
 
-### Matterbridge can't reach the Plasma
-- Test directly: `curl http://<plasma-ip>/status`
-- Use a static IP in `secrets.py` to avoid DHCP changes
-- Both Pi and Plasma must be on the same network/VLAN
+### Status LED is magenta (WiFi OK, no MQTT)
+- `MQTT_HOST` in `config.py` must be the Pi's IP; port must match `MQTT_PORT`.
+- `MQTT_USER` / `MQTT_PASSWORD` must match `MQTT_DEVICE_USER` /
+  `MQTT_DEVICE_PASSWORD`. Look for `bad username or password` on the serial console.
+- `docker compose logs mosquitto` shows refused logins.
 
-### Lights don't appear in Apple Home after pairing Matterbridge
-- Open Matterbridge web UI → Plugins → check matterbridge-webhooks is listed and enabled
-- Check logs: `sudo docker compose logs -f`
-- Re-add the plugin: `sudo docker exec -it matterbridge matterbridge --docker --add matterbridge-webhooks`
+### Entities don't appear in HA
+- Check that the MQTT integration is set up (Step 2.4).
+- Watch the traffic: `docker exec -it lightbar-mosquitto mosquitto_sub -u <MQTT_HA_USER> -P <pw> -t 'lightbar/#' -t 'homeassistant/#' -v`
+- `MQTT_TOPIC_PREFIX` must be the same in `.env` and `config.py`, or the ACL
+  blocks the device.
 
-### Colour changes don't work (Invalid URL or failed errors in logs)
-- Re-apply the plugin patches from Step 3.5
-- Check the config file: `sudo cat /root/.matterbridge/matterbridge-webhooks.config.json`
-- Confirm `rgbUrl` uses `${HUE}` and `${SATURATION}` (uppercase), not `${red}/${green}/${blue}`
+### Lights missing in Apple Home
+- Restart HA once after the entities first appear (Step 4.1).
+- Check that `HOMEKIT_ENTITY_GLOB` matches the entity IDs.
 
-### Plugin patches lost after image update
-- Re-apply Step 3.5 after every `docker compose pull`
-
-### mDNS warning about tailscale0
-- If the Pi has Tailscale installed, add `--mdnsinterface eth0` to the
-  Matterbridge command to force it to use the correct interface:
-  ```yaml
-  command: ["matterbridge", "--docker", "--mdnsinterface", "eth0"]
-  ```
+### Mosquitto keeps restarting
+- `docker compose logs mosquitto`: usually a `change-me` password or an empty variable in `.env`.
 
 ---
 
@@ -402,9 +261,6 @@ curl http://$PLASMA/status
 
 | File | Version |
 |---|---|
-| `plasma2350w/main.py` | 1.5.0 |
-| `plasma2350w/gradient.py` | 1.1.0 |
-| `plasma2350w/secrets.py` | 1.0.0 |
-| `bridge/docker-compose.yml` | 1.2.0 |
-| `bridge/.env` | 1.1.0 |
-| `bridge/setup.sh` | 1.1.0 |
+| `plasma2350w/main.py`, `app.py`, `config.py`, `lightbar.py`, `gradient.py`, `http_api.py` | 2.0.0 |
+| `plasma2350w/ha.py`, `mqtt.py` | 1.0.0 |
+| `hub/docker-compose.yml`, `.env.example`, `mosquitto/*`, `homeassistant/configuration.yaml` | 2.0.0 |

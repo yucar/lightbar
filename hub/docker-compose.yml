@@ -1,0 +1,63 @@
+# ══════════════════════════════════════════════════════════════════
+# Lightbar hub — Home Assistant + Mosquitto (Raspberry Pi / any Linux)
+# Version: 2.0.0
+# ══════════════════════════════════════════════════════════════════
+#
+#   Plasma 2350 W ──MQTT──► Mosquitto ◄──► Home Assistant ──HomeKit──► Apple Home
+#
+# Everything is configured from .env — no files to edit by hand:
+#
+#   cp .env.example .env      # set passwords (the broker refuses defaults)
+#   docker compose up -d
+#
+# Then follow docs/setup.md, Step 4 (HA onboarding, MQTT, pair with Apple Home).
+#
+# ══════════════════════════════════════════════════════════════════
+
+name: lightbar
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:${MOSQUITTO_VERSION:-2}
+    container_name: lightbar-mosquitto
+    restart: unless-stopped
+    ports:
+      - "${MQTT_PORT:-1883}:1883"
+    environment:
+      MQTT_HA_USER: ${MQTT_HA_USER:?set MQTT_HA_USER in .env}
+      MQTT_HA_PASSWORD: ${MQTT_HA_PASSWORD:?set MQTT_HA_PASSWORD in .env}
+      MQTT_DEVICE_USER: ${MQTT_DEVICE_USER:?set MQTT_DEVICE_USER in .env}
+      MQTT_DEVICE_PASSWORD: ${MQTT_DEVICE_PASSWORD:?set MQTT_DEVICE_PASSWORD in .env}
+      MQTT_TOPIC_PREFIX: ${MQTT_TOPIC_PREFIX:-lightbar}
+    # Generates the password + ACL files from the variables above, then
+    # starts Mosquitto. Change .env and `docker compose up -d` to apply.
+    entrypoint: ["/bin/sh", "/lightbar/entrypoint.sh"]
+    volumes:
+      - ./mosquitto:/lightbar:ro
+      - mosquitto-data:/mosquitto/data
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -u \"$$MQTT_HA_USER\" -P \"$$MQTT_HA_PASSWORD\" -t '$$SYS/broker/version' -C 1 -W 3"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:${HA_VERSION:-stable}
+    container_name: lightbar-homeassistant
+    restart: unless-stopped
+    network_mode: host          # Required by HomeKit Bridge (mDNS / Bonjour)
+    environment:
+      TZ: ${TZ:-Etc/UTC}
+      # Read by homeassistant/configuration.yaml via !env_var
+      HOMEKIT_NAME: ${HOMEKIT_NAME:-Lightbar Bridge}
+      HOMEKIT_PORT: ${HOMEKIT_PORT:-21064}
+      HOMEKIT_ENTITY_GLOB: ${HOMEKIT_ENTITY_GLOB:-light.lightbar*}
+    volumes:
+      - ./homeassistant:/config
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+
+volumes:
+  mosquitto-data:

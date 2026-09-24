@@ -1,0 +1,18 @@
+# Lightbar — Home Assistant configuration
+# Version: 2.0.0
+#
+# Values come from hub/.env through docker-compose.yml (!env_var NAME default).
+# Everything else (users, the MQTT broker login, the Lightbar entities) is
+# set up in the UI or arrives automatically via MQTT discovery.
+
+default_config:
+
+# ── Apple Home ────────────────────────────────────────────────────
+# HA's built-in HomeKit Bridge: no add-ons, no custom components.
+# Pair it from the QR code in HA's notifications (Apple Home → Add Accessory).
+homekit:
+  - name: !env_var HOMEKIT_NAME Lightbar Bridge
+    port: !env_var HOMEKIT_PORT 21064
+    filter:
+      include_entity_globs:
+        - !env_var HOMEKIT_ENTITY_GLOB light.lightbar*

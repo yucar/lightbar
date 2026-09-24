@@ -1,68 +1,78 @@
 # gradient.py — Polychromatic HSV gradient math for Lightbar
-# Version: 1.1.0
+# Version: 2.0.0
 #
-# Generates smooth HSV gradients across a WS2812 LED strip.
-# Uses POLYCHROMATIC interpolation: hue always travels forward
-# (increasing) around the color wheel, creating rainbow-like transitions.
-# Supports 2-color and 3-color gradients.
+# Builds a gradient across the strip from N evenly spaced anchors
+# ("virtual lights"). Each anchor is (hue, saturation, value), all 0.0-1.0.
+#
+#   • Hue travels FORWARD around the colour wheel between anchors
+#     (polychromatic / rainbow-like). Two anchors with the same hue give a
+#     solid colour; a small backwards step gives an almost-full rainbow.
+#   • Saturation and value are interpolated linearly, so each light's
+#     brightness blends smoothly into its neighbour's.
+#
+# Frames are stored in flat float arrays: [h0, s0, v0, h1, s1, v1, ...].
+# This avoids allocating 192 tuples per frame and keeps the GC quiet.
+
+from array import array
+
+try:
+    from micropython import native
+except ImportError:  # CPython (tests) or a build without the native emitter
+    def native(f):
+        return f
 
 
-def hsv_lerp_poly(h1, s1, v1, h2, s2, v2, t):
-    """Polychromatic interpolation between two HSV colors.
-
-    Hue ALWAYS travels forward (increasing) around the color wheel.
-    """
-    dh = h2 - h1
-    if dh <= 0.0:
-        dh += 1.0
-    h = (h1 + dh * t) % 1.0
-    s = s1 + (s2 - s1) * t
-    v = v1 + (v2 - v1) * t
-    return h, s, v
+def new_frame(num_leds):
+    """Allocate a zeroed frame buffer for num_leds LEDs."""
+    return array("f", [0.0] * (num_leds * 3))
 
 
-def hsv_lerp_short(h1, s1, v1, h2, s2, v2, t):
-    """Shortest-path interpolation between two HSV colors."""
-    dh = h2 - h1
-    if dh > 0.5:
-        dh -= 1.0
-    elif dh < -0.5:
-        dh += 1.0
-    h = (h1 + dh * t) % 1.0
-    s = s1 + (s2 - s1) * t
-    v = v1 + (v2 - v1) * t
-    return h, s, v
+@native
+def build(out, num_leds, anchors):
+    """Fill `out` with a gradient through `anchors` (list of (h, s, v))."""
+    n_anchors = len(anchors)
+    if n_anchors == 1 or num_leds == 1:
+        h, s, v = anchors[0]
+        for i in range(num_leds):
+            j = i * 3
+            out[j] = h
+            out[j + 1] = s
+            out[j + 2] = v
+        return
 
-
-def gradient_2color(num_leds, h1, s1, v1, h2, s2, v2, polychromatic=True):
-    """Generate a 2-color gradient across num_leds LEDs."""
-    if num_leds <= 1:
-        return [(h1, s1, v1)]
-    lerp = hsv_lerp_poly if polychromatic else hsv_lerp_short
-    result = []
+    segments = n_anchors - 1
+    last = num_leds - 1
     for i in range(num_leds):
-        t = i / (num_leds - 1)
-        result.append(lerp(h1, s1, v1, h2, s2, v2, t))
-    return result
+        # Position along the strip in "segments", e.g. 0.0 .. 2.0 for 3 anchors.
+        pos = i * segments / last
+        seg = int(pos)
+        if seg >= segments:
+            seg = segments - 1
+        t = pos - seg
+        h1, s1, v1 = anchors[seg]
+        h2, s2, v2 = anchors[seg + 1]
+        dh = (h2 - h1) % 1.0          # forward distance around the wheel
+        j = i * 3
+        out[j] = (h1 + dh * t) % 1.0
+        out[j + 1] = s1 + (s2 - s1) * t
+        out[j + 2] = v1 + (v2 - v1) * t
 
 
-def gradient_3color(num_leds, h1, s1, v1, h2, s2, v2, h3, s3, v3,
-                    polychromatic=True):
-    """Generate a 3-color gradient across num_leds LEDs.
-    Color 1 at start, color 2 in middle, color 3 at end.
+@native
+def blend(out, a, b, t, num_leds):
+    """out = a → b at fraction t, hue along the SHORTEST path.
+
+    Used for crossfades between two frames so any change (colour,
+    brightness, on/off) is continuous, even mid-transition.
     """
-    if num_leds <= 1:
-        return [(h1, s1, v1)]
-    if num_leds == 2:
-        return [(h1, s1, v1), (h3, s3, v3)]
-    lerp = hsv_lerp_poly if polychromatic else hsv_lerp_short
-    mid = num_leds // 2
-    result = []
-    for i in range(mid):
-        t = i / mid
-        result.append(lerp(h1, s1, v1, h2, s2, v2, t))
-    remaining = num_leds - mid
-    for i in range(remaining):
-        t = i / (remaining - 1) if remaining > 1 else 1.0
-        result.append(lerp(h2, s2, v2, h3, s3, v3, t))
-    return result
+    for i in range(num_leds):
+        j = i * 3
+        h1 = a[j]
+        dh = b[j] - h1
+        if dh > 0.5:
+            dh -= 1.0
+        elif dh < -0.5:
+            dh += 1.0
+        out[j] = (h1 + dh * t) % 1.0
+        out[j + 1] = a[j + 1] + (b[j + 1] - a[j + 1]) * t
+        out[j + 2] = a[j + 2] + (b[j + 2] - a[j + 2]) * t

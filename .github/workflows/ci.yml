@@ -1,0 +1,81 @@
+# Lightbar CI — firmware tests, MicroPython compile check, hub config checks.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  firmware:
+    name: Firmware tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Mosquitto (for the MQTT integration tests)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mosquitto mosquitto-clients
+          sudo systemctl stop mosquitto || true   # tests start their own brokers
+
+      - name: Install tools
+        run: pip install mpy-cross pyflakes
+
+      - name: Lint firmware
+        run: python -m pyflakes plasma2350w
+
+      - name: Compile for MicroPython (RP2350 native emitter)
+        run: |
+          for f in plasma2350w/*.py; do
+            mpy-cross -march=armv7emsp -o /dev/null "$f"
+          done
+
+      - name: Unit + integration tests
+        run: python -W error::RuntimeWarning -m unittest discover -s tests -v
+
+  hub:
+    name: Hub config
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck
+        run: shellcheck hub/mosquitto/entrypoint.sh
+
+      - name: Validate docker-compose.yml
+        working-directory: hub
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+
+      - name: Broker starts, enforces auth and passes its healthcheck
+        working-directory: hub
+        run: |
+          sed -i 's/^MQTT_HA_PASSWORD=.*/MQTT_HA_PASSWORD=ci-ha-pw/; s/^MQTT_DEVICE_PASSWORD=.*/MQTT_DEVICE_PASSWORD=ci-dev-pw/' .env
+          docker compose up -d --wait mosquitto
+          docker compose exec -T mosquitto sh -c \
+            '! mosquitto_pub -t test -m x 2>/dev/null'   # anonymous must be refused
+          docker compose exec -T mosquitto \
+            mosquitto_pub -u lightbar -P ci-dev-pw -t lightbar/ci/state -m ok
+
+      - name: Broker refuses default passwords
+        working-directory: hub
+        run: |
+          docker compose down -v
+          cp .env.example .env
+          docker compose up -d mosquitto
+          sleep 5
+          docker compose logs mosquitto | grep -q "Refusing to start with a default password"
+
+      - name: Logs on failure
+        if: failure()
+        working-directory: hub
+        run: docker compose logs
